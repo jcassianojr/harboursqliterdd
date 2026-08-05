@@ -213,7 +213,7 @@ RETURN nResult
 
 STATIC FUNCTION SL3_LOADCACHE( aWAData )
    LOCAL db := aWAData[ AREA_CONN ]
-   LOCAL aResult, i, j
+   LOCAL aResult, i
    
    aResult := sqlite3_get_table( db, "SELECT * FROM " + aWAData[ AREA_TABLE ] )
    

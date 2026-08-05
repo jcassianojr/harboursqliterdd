@@ -1,0 +1,35 @@
+/* --------------------------------------------------------------------
+ * NOTE: You can add manual override which functions to include or
+ *       exclude from automatically generated EXTERNAL/DYNAMIC list.
+ *          Syntax: // HB_FUNC_INCLUDE <func>
+ *                  // HB_FUNC_EXCLUDE <func>
+ */
+
+/* --------------------------------------------------------------------
+ * WARNING: Automatically generated code below. DO NOT EDIT! (except casing)
+ *          Regenerate using hbmk2 '-hbx=' option.
+ */
+
+#ifndef __HBEXTERN_CH__SQLITERDD__
+#define __HBEXTERN_CH__SQLITERDD__
+
+#if defined( __HBEXTREQ__ ) .OR. defined( __HBEXTERN__SQLITERDD__ANNOUNCE )
+   ANNOUNCE __HBEXTERN__SQLITERDD__
+#endif
+
+#if defined( __HBEXTREQ__ ) .OR. defined( __HBEXTERN__SQLITERDD__REQUEST )
+   #command DYNAMIC <fncs,...> => EXTERNAL <fncs>
+#endif
+
+DYNAMIC DBSL3CLEARCONNECTION
+DYNAMIC DBSL3CONNECTION
+DYNAMIC DBSL3GETHANDLE
+DYNAMIC SL3RDD
+DYNAMIC SL3RDD_GETFUNCTABLE
+DYNAMIC SL3_SETPK
+
+#if defined( __HBEXTREQ__ ) .OR. defined( __HBEXTERN__SQLITERDD__REQUEST )
+   #uncommand DYNAMIC <fncs,...> => EXTERNAL <fncs>
+#endif
+
+#endif
