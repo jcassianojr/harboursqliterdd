@@ -473,7 +473,29 @@ RETURN SUCCESS
 
 STATIC FUNCTION SL3_RECCOUNT( nWA, nRecords )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
-   nRecords := Len( aWAData[ AREA_CACHE ] )
+   LOCAL db := aWAData[ AREA_CONN ]
+   LOCAL stmt
+
+   // Executa um comando SQL direto para contar todos os registros da tabela
+   stmt := sqlite3_prepare( db, "SELECT COUNT(*) FROM " + aWAData[ AREA_TABLE ] )
+   
+   IF !Empty( stmt )
+      // Se a consulta rodar com sucesso, lê a primeira linha
+      IF sqlite3_step( stmt ) == SQLITE_ROW
+         // No Harbour com SQLite, o índice da coluna começa em 1
+         nRecords := sqlite3_column_int( stmt, 1 )
+      ELSE
+         // Fallback de segurança
+         nRecords := Len( aWAData[ AREA_CACHE ] )
+      ENDIF
+      
+      // Finaliza o statement para liberar memória
+      sqlite3_finalize( stmt )
+   ELSE
+      // Fallback de segurança se falhar a instrução SQL
+      nRecords := Len( aWAData[ AREA_CACHE ] )
+   ENDIF
+
 RETURN SUCCESS
 
 STATIC FUNCTION SL3_BOF( nWA, lBof )
