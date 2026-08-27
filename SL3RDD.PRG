@@ -153,11 +153,11 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
             cSql += "DATE NOT NULL DEFAULT ('')"
          CASE mFldType == HB_FT_TIMESTAMP .OR. mFldType == HB_FT_TIME
             cSql += "DATETIME"
-         CASE mFldType == HB_FT_DOUBLE .OR. mFldType == HB_FT_INTEGER .OR. mFldType == HB_FT_LONG
+        CASE mFldType == HB_FT_DOUBLE .OR. mFldType == HB_FT_INTEGER .OR. mFldType == HB_FT_LONG
             IF mFldDec > 0
-               cSql += "FLOAT default 0" 
+               cSql += "NUMERIC(" + hb_ntos( mFldLen ) + "," + hb_ntos( mFldDec ) + ") default 0" 
             ELSE
-               cSql += "INTEGER default 0"
+               cSql += "NUMERIC(" + hb_ntos( mFldLen ) + ",0) default 0"
             ENDIF
          CASE mFldType == HB_FT_CURRENCY
             IF mFldDec > 0
@@ -344,6 +344,8 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
                aRow[ i ] := .F.
             ELSEIF nFType == HB_FT_DATE
                aRow[ i ] := CToD("")
+            ELSEIF nFType == HB_FT_TIMESTAMP
+               aRow[ i ] := 0
             ELSE
                aRow[ i ] := NIL
             ENDIF
@@ -353,18 +355,20 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
                aRow[ i ] := ( aRow[ i ] != 0 )
             ENDIF
          ELSEIF nSqlType == SQLITE_FLOAT
-            aRow[ i ] := sqlite3_column_double( stmt, i )
+            // Tratamento e arredondamento de decimais conforme a estrutura da coluna
+            aRow[ i ] := Round( sqlite3_column_double( stmt, i ), aWAData[ AREA_STRUCT ][ i ][ UR_FI_DEC ] )
          ELSE
             cVal := sqlite3_column_text( stmt, i )
             IF nFType == HB_FT_DATE
-               aRow[ i ] := SToD( StrTran( cVal, "-", "" ) )
+               aRow[ i ] := IIf( Empty( cVal ), CToD(""), SToD( StrTran( cVal, "-", "" ) ) )
             ELSEIF nFType == HB_FT_LOGICAL
                aRow[ i ] := ( Lower( cVal ) == "yes" .OR. Lower( cVal ) == "true" .OR. cVal == "1" )
             ELSE
                aRow[ i ] := cVal
             ENDIF
          ENDIF
-      NEXT
+      NEXT      
+      
       
       AAdd( aWAData[ AREA_CACHE ], aRow )
       RETURN .T.
@@ -623,11 +627,11 @@ STATIC FUNCTION SL3_BIND_VAR( stmt, nIndex, xVal )
    ELSEIF cType == "C" .OR. cType == "M"
       sqlite3_bind_text( stmt, nIndex, xVal ) 
    ELSEIF cType == "D"
-      IF Empty( xVal )
-         sqlite3_bind_text( stmt, nIndex, "0000-00-00" )
-      ELSE
-         sqlite3_bind_text( stmt, nIndex, StrZero(Year(xVal),4)+"-"+StrZero(Month(xVal),2)+"-"+StrZero(Day(xVal),2) ) 
-      ENDIF
+     IF Empty( xVal )
+        sqlite3_bind_null( stmt, nIndex )
+     ELSE
+        sqlite3_bind_text( stmt, nIndex, StrZero(Year(xVal),4)+"-"+StrZero(Month(xVal),2)+"-"+StrZero(Day(xVal),2) ) 
+     ENDIF
    ELSEIF cType == "L"
       sqlite3_bind_text( stmt, nIndex, IIf( xVal, "yes", "no" ) ) 
    ELSE
