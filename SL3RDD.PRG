@@ -108,11 +108,12 @@ STATIC FUNCTION SL3_ADDFIELD( nWA, aField )
    
 RETURN UR_SUPER_ADDFIELD( nWA, aField )
 
+
 STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
    LOCAL db, oError, cSql, n, nResult
    LOCAL cTableName := AllTrim( aOpenInfo[ UR_OI_NAME ] )
-   LOCAL aStruct    := aWAData[ AREA_STRUCT ] 
+   LOCAL aStruct    := aWAData[ AREA_STRUCT ]
    LOCAL mFldNm, mFldType, mFldLen, mFldDec
 
    IF !Empty( aOpenInfo[ UR_OI_CONNECT ] ) .AND. aOpenInfo[ UR_OI_CONNECT ] <= Len( s_aConnections )
@@ -134,7 +135,7 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
 
    FOR n := 1 TO Len( aStruct )
       mFldNm   := aStruct[ n, UR_FI_NAME ]
-      mFldType := aStruct[ n, UR_FI_TYPE ] 
+      mFldType := aStruct[ n, UR_FI_TYPE ]
       mFldLen  := aStruct[ n, UR_FI_LEN ]
       mFldDec  := aStruct[ n, UR_FI_DEC ]
 
@@ -145,178 +146,75 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
       cSql += AllTrim( mFldNm ) + " "
 
       DO CASE
-         CASE mFldType == HB_FT_AUTOINC .OR. mFldNm == "SR_RECNO"
-            cSql += "INTEGER UNIQUE" 
-         CASE mFldType == HB_FT_STRING .OR. mFldType == HB_FT_ANY
-            cSql += "TEXT NOT NULL DEFAULT ('')" 
+         CASE mFldType == HB_FT_AUTOINC
+            cSql += "INTEGER PRIMARY KEY AUTOINCREMENT" 
+         CASE mFldNm == "SR_RECNO"
+            cSql += "INTEGER UNIQUE"
+            
+         CASE mFldType == HB_FT_STRING .OR. mFldType == HB_FT_ANY .OR. mFldType == HB_FT_VARLENGTH
+            cSql += "TEXT NOT NULL DEFAULT ('')"
+            
          CASE mFldType == HB_FT_DATE
             cSql += "DATE NOT NULL DEFAULT ('')"
          CASE mFldType == HB_FT_TIMESTAMP .OR. mFldType == HB_FT_TIME
             cSql += "DATETIME"
-        CASE mFldType == HB_FT_DOUBLE .OR. mFldType == HB_FT_INTEGER .OR. mFldType == HB_FT_LONG
+            
+         CASE mFldType == HB_FT_DOUBLE .OR. mFldType == HB_FT_LONG .OR. mFldType == HB_FT_FLOAT
             IF mFldDec > 0
-               cSql += "NUMERIC(" + hb_ntos( mFldLen ) + "," + hb_ntos( mFldDec ) + ") default 0" 
+               cSql += "NUMERIC(" + hb_ntos( mFldLen ) + "," + hb_ntos( mFldDec ) + ") default 0"
             ELSE
                cSql += "NUMERIC(" + hb_ntos( mFldLen ) + ",0) default 0"
             ENDIF
-         CASE mFldType == HB_FT_CURRENCY
+            
+         CASE mFldType == HB_FT_CURRENCY .OR. mFldType == HB_FT_CURDOUBLE
             IF mFldDec > 0
                cSql += "NUMERIC(" + hb_ntos( mFldLen ) + "," + hb_ntos( mFldDec ) + ")"
             ELSE
                cSql += "NUMERIC(" + hb_ntos( mFldLen ) + ")"
             ENDIF
+            
+         CASE mFldType == HB_FT_INTEGER
+            cSql += "INTEGER default 0"
+            
          CASE mFldType == HB_FT_LOGICAL
             cSql += "BOOLEAN"
+            
          CASE mFldType == HB_FT_MEMO
             cSql += "TEXT"
-         CASE mFldType == HB_FT_BLOB
+            
+         CASE mFldType == HB_FT_BLOB .OR. mFldType == HB_FT_IMAGE .OR. mFldType == HB_FT_OLE
             cSql += "BLOB"
+            
+         CASE mFldType == HB_FT_ROWVER
+            cSql += "INTEGER DEFAULT 0"
+            
          OTHERWISE
             cSql += "TEXT"
       ENDCASE
    NEXT
    
-   cSql += " )"
+   cSql += " ); "
+   
+   cSql += "PRAGMA temp_store = MEMORY; "
+   cSql += "PRAGMA cache_size = 2000; " 
+   cSql += "PRAGMA journal_mode = WAL; " 
+   cSql += "PRAGMA synchronous = NORMAL; " 
+   cSql += "PRAGMA auto_vacuum = INCREMENTAL; " 
+   cSql += "PRAGMA page_size = 4096; " 
+   cSql += "PRAGMA mmap_size = 300000000; " 
+   cSql += "PRAGMA busy_timeout = 5000; " 
+
    nResult := sqlite3_exec( db, cSql )
 
    IF sqlite3_errcode( db ) > 0
       oError := ErrorNew()
       oError:GenCode     := EG_CREATE
-      oError:Description := "Erro ao criar tabela SQLite: " + sqlite3_errmsg( db )
+      oError:Description := "Erro ao criar tabela/aplicar Pragmas SQLite: " + sqlite3_errmsg( db )
       UR_SUPER_ERROR( nWA, oError )
       RETURN FAILURE
    ENDIF
 
 RETURN SUCCESS
-
-STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
-   LOCAL aWAData := USRRDD_AREADATA( nWA )
-   LOCAL oError, nResult, db, stmt, nCols, i
-   LOCAL aField, cTableName, cBaseType, cType
-   LOCAL nFieldLen, nDec, nPos1, nPos2, nPosComma, cParams
-
-   IF !Empty( aOpenInfo[ UR_OI_CONNECT ] ) .AND. aOpenInfo[ UR_OI_CONNECT ] <= Len( s_aConnections )
-      db := s_aConnections[ aOpenInfo[ UR_OI_CONNECT ] ]
-   ELSEIF Len( s_aConnections ) > 0
-      db := s_aConnections[ Len( s_aConnections ) ]
-   ENDIF
-
-   IF Empty( db )
-      oError := ErrorNew()
-      oError:GenCode     := EG_OPEN
-      oError:Description := hb_langErrMsg( EG_OPEN ) + ", Nenhuma conexao SQLite ativa."
-      oError:FileName    := aOpenInfo[ UR_OI_NAME ]
-      UR_SUPER_ERROR( nWA, oError )
-      RETURN FAILURE
-   ENDIF
-
-   cTableName := AllTrim( aOpenInfo[ UR_OI_NAME ] )
-   
-   stmt := sqlite3_prepare( db, "SELECT * FROM " + cTableName )
-   IF Empty( stmt ) .OR. sqlite3_errcode( db ) > 0
-      oError := ErrorNew()
-      oError:GenCode     := EG_OPEN
-      oError:Description := "Falha ao preparar leitura da tabela: " + cTableName
-      UR_SUPER_ERROR( nWA, oError )
-      RETURN FAILURE
-   ENDIF
-
-   aWAData[ AREA_CONN ]        := db
-   aWAData[ AREA_TABLE ]       := cTableName
-   aWAData[ AREA_PK ]          := {}
-   aWAData[ AREA_RECNO ]       := 0
-   aWAData[ AREA_APPEND ]      := .F.
-   aWAData[ AREA_FIELDS ]      := {}
-   aWAData[ AREA_TYPES ]       := {}
-   aWAData[ AREA_CACHE ]       := {}
-   aWAData[ AREA_STMT ]        := stmt
-   aWAData[ AREA_FETCHED_EOF ] := .F.
-
-   nCols := sqlite3_column_count( stmt )
-   UR_SUPER_SETFIELDEXTENT( nWA, nCols )
-
-   FOR i := 1 TO nCols
-      cType := sqlite3_column_decltype( stmt, i )
-      IF Empty( cType )
-         cType := "ANY"
-      ELSE
-         cType := Upper( AllTrim( cType ) )
-         IF At( ":", cType ) > 0
-            cType := SubStr( cType, 1, At( ":", cType ) - 1 )
-         ENDIF
-      ENDIF
-
-      aField := Array( UR_FI_SIZE )
-      aField[ UR_FI_NAME ] := sqlite3_column_name( stmt, i )
-
-      nFieldLen := 0
-      nDec      := 0
-      nPos1     := At( "(", cType )
-      nPos2     := At( ")", cType )
-
-      IF nPos1 > 0 .AND. nPos2 > nPos1
-         cParams   := SubStr( cType, nPos1 + 1, nPos2 - nPos1 - 1 )
-         nPosComma := At( ",", cParams )
-         IF nPosComma > 0
-            nFieldLen := Val( SubStr( cParams, 1, nPosComma - 1 ) )
-            nDec      := Val( SubStr( cParams, nPosComma + 1 ) )
-         ELSE
-            nFieldLen := Val( cParams )
-            nDec      := 0
-         ENDIF
-      ENDIF
-
-      cBaseType := cType
-      IF At( "(", cBaseType ) > 0
-         cBaseType := SubStr( cBaseType, 1, At( "(", cBaseType ) - 1 )
-      ENDIF
-      cBaseType := AllTrim( cBaseType )
-      
-      IF "INT" $ cBaseType .OR. cBaseType == "I"
-         aField[ UR_FI_TYPE ] := HB_FT_LONG
-         aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 10 )
-         aField[ UR_FI_DEC ]  := 0
-      ELSEIF "REAL" $ cBaseType .OR. "NUM" $ cBaseType .OR. "DOUB" $ cBaseType .OR. cBaseType == "N" .OR. cBaseType == "F"
-         aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
-         aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 18 )
-         aField[ UR_FI_DEC ]  := IIf( nPos1 > 0, nDec, 4 )
-      ELSEIF "DATE" $ cBaseType .OR. cBaseType == "D"
-         aField[ UR_FI_TYPE ] := HB_FT_DATE
-         aField[ UR_FI_LEN ]  := 8
-         aField[ UR_FI_DEC ]  := 0
-      ELSEIF "BOOL" $ cBaseType .OR. cBaseType == "L"
-         aField[ UR_FI_TYPE ] := HB_FT_LOGICAL
-         aField[ UR_FI_LEN ]  := 1
-         aField[ UR_FI_DEC ]  := 0
-      ELSEIF cBaseType == "B"
-         aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
-         aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 18 )
-         aField[ UR_FI_DEC ]  := IIf( nPos1 > 0, nDec, 4 )
-      ELSE
-         aField[ UR_FI_TYPE ] := HB_FT_STRING
-         aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 255 )
-         aField[ UR_FI_DEC ]  := 0
-      ENDIF
-      
-      AAdd( aWAData[ AREA_FIELDS ], aField[ UR_FI_NAME ] )
-      AAdd( aWAData[ AREA_TYPES ],  aField[ UR_FI_TYPE ] )
-      UR_SUPER_ADDFIELD( nWA, aField )
-   NEXT
-    
-   SL3_FETCH_NEXT( nWA )
-   
-   IF Len( aWAData[ AREA_CACHE ] ) > 0
-      aWAData[ AREA_RECNO ] := 1
-      aWAData[ AREA_BOF ]   := .F.
-      aWAData[ AREA_EOF ]   := .F.
-   ELSE
-      aWAData[ AREA_RECNO ] := 0
-      aWAData[ AREA_BOF ]   := .T.
-      aWAData[ AREA_EOF ]   := .T.
-   ENDIF
-
-   nResult := UR_SUPER_OPEN( nWA, aOpenInfo )
-RETURN nResult
 
 STATIC FUNCTION SL3_FETCH_NEXT( nWA )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
@@ -750,3 +648,204 @@ FUNCTION SL3RDD_GETFUNCTABLE( pFuncCount, pFuncTable, pSuperTable, nRddID )
 INIT PROC SL3_INIT_REGISTER()
    rddRegister( "SL3RDD", RDT_FULL )
 RETURN
+
+STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
+   LOCAL aWAData := USRRDD_AREADATA( nWA )
+   LOCAL oError, nResult, db, stmt, stmtPk, nCols, i
+   LOCAL aField, cTableName, cBaseType, cType
+   LOCAL nFieldLen, nDec, nPos1, nPos2, nPosComma, cParams
+
+   IF !Empty( aOpenInfo[ UR_OI_CONNECT ] ) .AND. aOpenInfo[ UR_OI_CONNECT ] <= Len( s_aConnections )
+      db := s_aConnections[ aOpenInfo[ UR_OI_CONNECT ] ]
+   ELSEIF Len( s_aConnections ) > 0
+      db := s_aConnections[ Len( s_aConnections ) ]
+   ENDIF
+
+   IF Empty( db )
+      oError := ErrorNew()
+      oError:GenCode     := EG_OPEN
+      oError:Description := hb_langErrMsg( EG_OPEN ) + ", Nenhuma conexao SQLite ativa."
+      oError:FileName    := aOpenInfo[ UR_OI_NAME ]
+      UR_SUPER_ERROR( nWA, oError )
+      RETURN FAILURE
+   ENDIF
+
+   cTableName := AllTrim( aOpenInfo[ UR_OI_NAME ] )
+   
+   aWAData[ AREA_CONN ]        := db
+   aWAData[ AREA_TABLE ]       := cTableName
+   aWAData[ AREA_PK ]          := {}
+   aWAData[ AREA_RECNO ]       := 0
+   aWAData[ AREA_APPEND ]      := .F.
+   aWAData[ AREA_FIELDS ]      := {}
+   aWAData[ AREA_TYPES ]       := {}
+   aWAData[ AREA_CACHE ]       := {}
+   aWAData[ AREA_FETCHED_EOF ] := .F.
+
+   // Auto-Discovery da Primary Key via PRAGMA
+   stmtPk := sqlite3_prepare( db, "PRAGMA table_info(" + cTableName + ")" )
+   IF !Empty( stmtPk )
+      WHILE sqlite3_step( stmtPk ) == SQLITE_ROW
+         IF sqlite3_column_int( stmtPk, 6 ) > 0
+            AAdd( aWAData[ AREA_PK ], sqlite3_column_text( stmtPk, 2 ) )
+         ENDIF
+      ENDDO
+      sqlite3_finalize( stmtPk )
+   ENDIF
+   
+   stmt := sqlite3_prepare( db, "SELECT * FROM " + cTableName )
+   IF Empty( stmt ) .OR. sqlite3_errcode( db ) > 0
+      oError := ErrorNew()
+      oError:GenCode     := EG_OPEN
+      oError:Description := "Falha ao preparar leitura da tabela: " + cTableName
+      UR_SUPER_ERROR( nWA, oError )
+      RETURN FAILURE
+   ENDIF
+
+   aWAData[ AREA_STMT ]        := stmt
+
+   nCols := sqlite3_column_count( stmt )
+   UR_SUPER_SETFIELDEXTENT( nWA, nCols )
+
+   FOR i := 1 TO nCols
+      cType := sqlite3_column_decltype( stmt, i )
+      IF Empty( cType )
+         cType := "ANY"
+      ELSE
+         cType := Upper( AllTrim( cType ) )
+         IF At( ":", cType ) > 0
+            cType := SubStr( cType, 1, At( ":", cType ) - 1 )
+         ENDIF
+      ENDIF
+
+      aField := Array( UR_FI_SIZE )
+      aField[ UR_FI_NAME ] := sqlite3_column_name( stmt, i )
+
+      nFieldLen := 0
+      nDec      := 0
+      nPos1     := At( "(", cType )
+      nPos2     := At( ")", cType )
+
+      IF nPos1 > 0 .AND. nPos2 > nPos1
+         cParams   := SubStr( cType, nPos1 + 1, nPos2 - nPos1 - 1 )
+         nPosComma := At( ",", cParams )
+         IF nPosComma > 0
+            nFieldLen := Val( SubStr( cParams, 1, nPosComma - 1 ) )
+            nDec      := Val( SubStr( cParams, nPosComma + 1 ) )
+         ELSE
+            nFieldLen := Val( cParams )
+            nDec      := 0
+         ENDIF
+      ENDIF
+
+      cBaseType := cType
+      IF At( "(", cBaseType ) > 0
+         cBaseType := SubStr( cBaseType, 1, At( "(", cBaseType ) - 1 )
+      ENDIF
+      cBaseType := AllTrim( cBaseType )
+      
+      // --- MAPEAMENTO DE TIPOS BASEADO EM GERACAMPODBF ---
+      DO CASE
+         // --- Números com Suporte a Decimais ---
+         CASE "NUMERIC" $ cBaseType .OR. "DECIMAL" $ cBaseType .OR. "NUMBER" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
+            aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 10 )
+            aField[ UR_FI_DEC ]  := IIf( nPosComma > 0, nDec, 0 )
+
+         CASE "DOUBLE" $ cBaseType .OR. "FLOAT8" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
+            aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 19 )
+            aField[ UR_FI_DEC ]  := IIf( nPosComma > 0, nDec, 9 )
+
+         CASE "MONEY" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
+            aField[ UR_FI_LEN ]  := 14
+            aField[ UR_FI_DEC ]  := 2
+
+         CASE "REAL" $ cBaseType .OR. "FLOAT" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
+            aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 14 )
+            aField[ UR_FI_DEC ]  := IIf( nPosComma > 0, nDec, 5 )
+
+         // --- Inteiros ---
+         CASE "TINYINT" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_LONG
+            aField[ UR_FI_LEN ]  := 3
+            aField[ UR_FI_DEC ]  := 0
+
+         CASE "INT2" $ cBaseType .OR. "SMALLINT" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_LONG
+            aField[ UR_FI_LEN ]  := 5
+            aField[ UR_FI_DEC ]  := 0
+
+         CASE "BIGINT" $ cBaseType .OR. "INT8" $ cBaseType .OR. "OID" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_LONG
+            aField[ UR_FI_LEN ]  := 19
+            aField[ UR_FI_DEC ]  := 0
+
+         CASE "INT" $ cBaseType .OR. "MEDIUMINT" $ cBaseType .OR. "INTEGER" $ cBaseType .OR. "SERIAL" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_LONG
+            aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 10 )
+            aField[ UR_FI_DEC ]  := 0
+
+         // --- Datas e Horas ---
+         CASE "DATE" $ cBaseType .OR. "TIME" $ cBaseType .OR. "TIMESTAMP" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_DATE
+            aField[ UR_FI_LEN ]  := 8
+            aField[ UR_FI_DEC ]  := 0
+
+         // --- Lógicos ---
+         CASE "BOOL" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_LOGICAL
+            aField[ UR_FI_LEN ]  := 1
+            aField[ UR_FI_DEC ]  := 0
+
+         // --- RowVersion ---
+         CASE "ROWVERSION" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_STRING
+            aField[ UR_FI_LEN ]  := 8
+            aField[ UR_FI_DEC ]  := 0
+
+         // --- Textos e Memos ---
+         CASE "CLOB" $ cBaseType .OR. "LONGTEXT" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_MEMO
+            aField[ UR_FI_LEN ]  := 10
+            aField[ UR_FI_DEC ]  := 0
+
+         CASE "CHAR" $ cBaseType .OR. "TEXT" $ cBaseType .OR. "VARCHAR" $ cBaseType .OR. "BPCHAR" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_STRING
+            // Trunca em 250 se exceder o limite seguro ou se não for especificado
+            aField[ UR_FI_LEN ]  := IIf( nFieldLen == 0, 250, IIf( nFieldLen > 250, 250, nFieldLen ) )
+            aField[ UR_FI_DEC ]  := 0
+
+         // --- Binários ---
+         CASE "BYTEA" $ cBaseType .OR. "BLOB" $ cBaseType .OR. "IMAGE" $ cBaseType .OR. "VARBINARY" $ cBaseType
+            aField[ UR_FI_TYPE ] := HB_FT_MEMO
+            aField[ UR_FI_LEN ]  := 10
+            aField[ UR_FI_DEC ]  := 0
+
+         OTHERWISE
+            aField[ UR_FI_TYPE ] := HB_FT_STRING
+            aField[ UR_FI_LEN ]  := IIf( nFieldLen == 0, 10, IIf( nFieldLen > 250, 250, nFieldLen ) )
+            aField[ UR_FI_DEC ]  := 0
+      ENDCASE
+      
+      AAdd( aWAData[ AREA_FIELDS ], aField[ UR_FI_NAME ] )
+      AAdd( aWAData[ AREA_TYPES ],  aField[ UR_FI_TYPE ] )
+      UR_SUPER_ADDFIELD( nWA, aField )
+   NEXT
+    
+   SL3_FETCH_NEXT( nWA )
+   
+   IF Len( aWAData[ AREA_CACHE ] ) > 0
+      aWAData[ AREA_RECNO ] := 1
+      aWAData[ AREA_BOF ]   := .F.
+      aWAData[ AREA_EOF ]   := .F.
+   ELSE
+      aWAData[ AREA_RECNO ] := 0
+      aWAData[ AREA_BOF ]   := .T.
+      aWAData[ AREA_EOF ]   := .T.
+   ENDIF
+
+   nResult := UR_SUPER_OPEN( nWA, aOpenInfo )
+RETURN nResult
