@@ -26,6 +26,8 @@
 ANNOUNCE SL3RDD
 
 STATIC s_aConnections := {}
+THREAD STATIC t_lLoadMemos := .T.
+THREAD STATIC t_lLoadBlobs := .T.
 
 // +--------------------------------------------------------------------
 // +    Funcoes de Gerenciamento de Conexao SQLite
@@ -55,6 +57,14 @@ FUNCTION DBSL3CLEARCONNECTION( nConn )
       ENDIF
    ENDIF
 RETURN SUCCESS
+
+PROCEDURE SL3_SetLoadBlobs( lLoad )
+   t_lLoadBlobs := lLoad
+RETURN
+
+PROCEDURE SL3_SetLoadMemos( lLoad )
+   t_lLoadMemos := lLoad
+RETURN
 
 FUNCTION DBSL3GETHANDLE( nConn )
    IF nConn > 0 .AND. nConn <= Len( s_aConnections )
@@ -216,6 +226,20 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
 
 RETURN SUCCESS
 
+
+
+STATIC FUNCTION SL3_CLOSE( nWA )
+   LOCAL aWAData := USRRDD_AREADATA( nWA )
+   
+   IF !Empty( aWAData[ AREA_STMT ] )
+      sqlite3_finalize( aWAData[ AREA_STMT ] )
+      aWAData[ AREA_STMT ] := NIL
+   ENDIF
+   
+   aWAData[ AREA_CACHE ]  := {}
+   aWAData[ AREA_ROWBUF ] := NIL
+RETURN UR_SUPER_CLOSE( nWA )
+
 STATIC FUNCTION SL3_FETCH_NEXT( nWA )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
    LOCAL stmt := aWAData[ AREA_STMT ]
@@ -247,31 +271,33 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
             ELSE
                aRow[ i ] := NIL
             ENDIF
+            
          ELSEIF nSqlType == SQLITE_INTEGER
             aRow[ i ] := sqlite3_column_int( stmt, i )
             IF nFType == HB_FT_LOGICAL
                aRow[ i ] := ( aRow[ i ] != 0 )
             ENDIF
+            
          ELSEIF nSqlType == SQLITE_FLOAT
-            // Tratamento e arredondamento de decimais conforme a estrutura da coluna
             aRow[ i ] := Round( sqlite3_column_double( stmt, i ), aWAData[ AREA_STRUCT ][ i ][ UR_FI_DEC ] )
+            
          ELSE
-            cVal := sqlite3_column_text( stmt, i )
-            
-            // --- IMPLEMENTAÇÃO DOS CONVERSORES INTELIGENTES ---
-            IF nFType == HB_FT_DATE .OR. nFType == HB_FT_TIMESTAMP
-               // Conversor universal de datas[cite: 19, 20]
-               aRow[ i ] := StrDateRdd( cVal )
-               
-            ELSEIF nFType == HB_FT_LOGICAL
-               // Conversor universal de retornos textuais para Booleano[cite: 19, 20]
-               aRow[ i ] := strlogicrdd( cVal, .F. )
-               
+            // --- EXTRAÇÃO NATIVA SEM ON-DEMAND ---
+            IF nFType == HB_FT_BLOB .OR. nFType == HB_FT_IMAGE .OR. nFType == HB_FT_OLE
+               // Extração binária direta (evita truncamento por \0 no SQLite)[cite: 23]
+               aRow[ i ] := sqlite3_column_blob( stmt, i )
             ELSE
-               aRow[ i ] := cVal
+               cVal := sqlite3_column_text( stmt, i )
+               
+               // Conversores Inteligentes[cite: 23]
+               IF nFType == HB_FT_DATE .OR. nFType == HB_FT_TIMESTAMP
+                  aRow[ i ] := StrDateRdd( cVal )
+               ELSEIF nFType == HB_FT_LOGICAL
+                  aRow[ i ] := strlogicrdd( cVal, .F. )
+               ELSE
+                  aRow[ i ] := cVal // Memos e textos normais caem aqui[cite: 23]
+               ENDIF
             ENDIF
-            // --------------------------------------------------
-            
          ENDIF
       NEXT      
       
@@ -283,29 +309,47 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
    ENDIF
 RETURN .T.
 
-STATIC FUNCTION SL3_CLOSE( nWA )
-   LOCAL aWAData := USRRDD_AREADATA( nWA )
-   
-   IF !Empty( aWAData[ AREA_STMT ] )
-      sqlite3_finalize( aWAData[ AREA_STMT ] )
-      aWAData[ AREA_STMT ] := NIL
-   ENDIF
-   
-   aWAData[ AREA_CACHE ]  := {}
-   aWAData[ AREA_ROWBUF ] := NIL
-RETURN UR_SUPER_CLOSE( nWA )
 
 STATIC FUNCTION SL3_GETVALUE( nWA, nField, xValue )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
+   LOCAL cType   := aWAData[ AREA_TYPES ][ nField ]
+   
    IF aWAData[ AREA_APPEND ] .AND. !Empty( aWAData[ AREA_ROWBUF ] )
       xValue := aWAData[ AREA_ROWBUF ][ nField ]
    ELSEIF aWAData[ AREA_RECNO ] > 0 .AND. aWAData[ AREA_RECNO ] <= Len( aWAData[ AREA_CACHE ] )
       xValue := aWAData[ AREA_CACHE ][ aWAData[ AREA_RECNO ], nField ]
    ENDIF
+
+   // --- MASCARAMENTO DA INFORMAÇÃO VIA PARÂMETROS GLOBAIS ---[cite: 22]
+   IF cType == HB_FT_BLOB .OR. cType == HB_FT_IMAGE .OR. cType == HB_FT_OLE
+      IF !t_lLoadBlobs
+         xValue := "<IMAGEM/BLOB>"
+      ENDIF
+      
+   ELSEIF cType == HB_FT_MEMO
+      IF !t_lLoadMemos
+         xValue := "<MEMO>"
+      ENDIF
+   ENDIF
+
 RETURN SUCCESS
 
 STATIC FUNCTION SL3_PUTVALUE( nWA, nField, xValue )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
+   LOCAL cType   := aWAData[ AREA_TYPES ][ nField ]
+
+   // --- SEPARAÇÃO CLARA: BLOB vs MEMO ---
+   IF cType == HB_FT_BLOB .OR. cType == HB_FT_IMAGE .OR. cType == HB_FT_OLE
+      IF ( ValType( xValue ) == "C" .AND. xValue == "<IMAGEM/BLOB>" ) .OR. !t_lLoadBlobs
+         RETURN SUCCESS
+      ENDIF
+      
+   ELSEIF cType == HB_FT_MEMO
+      IF ( ValType( xValue ) == "C" .AND. xValue == "<MEMO>" ) .OR. !t_lLoadMemos
+         RETURN SUCCESS
+      ENDIF
+   ENDIF
+
    IF Empty( aWAData[ AREA_ROWBUF ] )
       IF aWAData[ AREA_RECNO ] > 0 .AND. aWAData[ AREA_RECNO ] <= Len( aWAData[ AREA_CACHE ] )
          aWAData[ AREA_ROWBUF ] := AClone( aWAData[ AREA_CACHE ][ aWAData[ AREA_RECNO ] ] )
@@ -313,6 +357,7 @@ STATIC FUNCTION SL3_PUTVALUE( nWA, nField, xValue )
          aWAData[ AREA_ROWBUF ] := Array( Len( aWAData[ AREA_FIELDS ] ) )
       ENDIF
    ENDIF
+   
    aWAData[ AREA_ROWBUF ][ nField ] := xValue
 RETURN SUCCESS
 
@@ -827,7 +872,7 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
 
          // --- Binários ---
          CASE "BYTEA" $ cBaseType .OR. "BLOB" $ cBaseType .OR. "IMAGE" $ cBaseType .OR. "VARBINARY" $ cBaseType
-            aField[ UR_FI_TYPE ] := HB_FT_MEMO
+            aField[ UR_FI_TYPE ] := HB_FT_BLOB
             aField[ UR_FI_LEN ]  := 10
             aField[ UR_FI_DEC ]  := 0
 
@@ -970,3 +1015,39 @@ STATIC FUNCTION StrDateRdd( xData )
    ENDIF
 
    RETURN dRet
+
+
+// +--------------------------------------------------------------------
+// +    Funções de Manipulação Direta de Memo/Blob
+// +--------------------------------------------------------------------
+FUNCTION SL3_PegarMemo( cCampo )
+   LOCAL cTxt, lAnt := t_lLoadMemos
+   SL3_SetLoadMemos( .T. )
+   cTxt := FieldGet( FieldPos( cCampo ) )
+   SL3_SetLoadMemos( lAnt )
+   RETURN iif( Empty( cTxt ) .OR. cTxt == "<MEMO>", "", cTxt )
+   
+FUNCTION SL3_GravarMemo( cCampo, cTxt )
+   LOCAL lAnt := t_lLoadMemos
+   IF ValType( cTxt ) != "C"; RETURN .F.; ENDIF
+   SL3_SetLoadMemos( .T. )
+   FieldPut( FieldPos( cCampo ), cTxt )
+   SL3_SetLoadMemos( lAnt )
+   RETURN .T. 
+
+FUNCTION SL3_PegarBlobJpg( cCampo, cDir )
+   LOCAL cBin, lAnt := t_lLoadBlobs
+   SL3_SetLoadBlobs( .T. )
+   cBin := FieldGet( FieldPos( cCampo ) )
+   SL3_SetLoadBlobs( lAnt )
+   IF Empty( cBin ) .OR. cBin == "<IMAGEM/BLOB>"; RETURN .F.; ENDIF
+   RETURN hb_memowrit( cDir, cBin )
+   
+FUNCTION SL3_GravarBlobJpg( cCampo, cDir )
+   LOCAL cBin, lAnt := t_lLoadBlobs
+   IF !hb_FileExists( cDir ); RETURN .F.; ENDIF
+   cBin := hb_memoread( cDir )
+   SL3_SetLoadBlobs( .T. )
+   FieldPut( FieldPos( cCampo ), cBin )
+   SL3_SetLoadBlobs( lAnt )
+   RETURN .T.
