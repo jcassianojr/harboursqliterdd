@@ -257,16 +257,23 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
             aRow[ i ] := Round( sqlite3_column_double( stmt, i ), aWAData[ AREA_STRUCT ][ i ][ UR_FI_DEC ] )
          ELSE
             cVal := sqlite3_column_text( stmt, i )
-            IF nFType == HB_FT_DATE
-               aRow[ i ] := IIf( Empty( cVal ), CToD(""), SToD( StrTran( cVal, "-", "" ) ) )
+            
+            // --- IMPLEMENTAÇÃO DOS CONVERSORES INTELIGENTES ---
+            IF nFType == HB_FT_DATE .OR. nFType == HB_FT_TIMESTAMP
+               // Conversor universal de datas[cite: 19, 20]
+               aRow[ i ] := StrDateRdd( cVal )
+               
             ELSEIF nFType == HB_FT_LOGICAL
-               aRow[ i ] := ( Lower( cVal ) == "yes" .OR. Lower( cVal ) == "true" .OR. cVal == "1" )
+               // Conversor universal de retornos textuais para Booleano[cite: 19, 20]
+               aRow[ i ] := strlogicrdd( cVal, .F. )
+               
             ELSE
                aRow[ i ] := cVal
             ENDIF
+            // --------------------------------------------------
+            
          ENDIF
       NEXT      
-      
       
       AAdd( aWAData[ AREA_CACHE ], aRow )
       RETURN .T.
@@ -274,7 +281,7 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
       aWAData[ AREA_FETCHED_EOF ] := .T.
       RETURN .F.
    ENDIF
-RETURN .T.  // <- CORRIGIDO: Adicionado o RETURN final que faltava
+RETURN .T.
 
 STATIC FUNCTION SL3_CLOSE( nWA )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
@@ -849,3 +856,117 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
 
    nResult := UR_SUPER_OPEN( nWA, aOpenInfo )
 RETURN nResult
+
+
+
+// +--------------------------------------------------------------------
+// +    Static Function strlogicrdd( cVAL, lDEFAULT )
+// +    Conversor universal de retornos textuais/numéricos para Booleano
+// +--------------------------------------------------------------------
+STATIC FUNCTION strlogicrdd( cVAL, lDEFAULT )
+
+   IF ValType( lDEFAULT ) <> "L"
+      lDEFAULT := .F.
+   ENDIF
+   
+   IF ValType( cVAL ) != "C"
+      cVAL := hb_ValToStr( cVAL )
+   ENDIF
+
+   SWITCH Upper( AllTrim( cVal ) )
+   CASE ".T."
+   CASE "TRUE"
+   CASE "YES"
+   CASE "SIM"
+   CASE "ON"
+   CASE "Y"
+   CASE "1"
+   CASE "T"
+   CASE "S"
+      RETURN .T.
+   CASE ".F."
+   CASE "FALSE"
+   CASE "NO"
+   CASE "NAO"
+   CASE "OFF"
+   CASE "N"
+   CASE "0"
+   CASE "F"
+   CASE "<NULL>"
+   CASE "NULL"
+   CASE "NUL"
+   CASE "NIL"
+      RETURN .F.
+   ENDSWITCH
+
+   RETURN lDEFAULT
+
+// +--------------------------------------------------------------------
+// +    Static Function StrDateRdd( xData )
+// +    Conversor inteligente de datas universal para o RDD
+// +--------------------------------------------------------------------
+STATIC FUNCTION StrDateRdd( xData )
+   LOCAL dRet := CToD( "" )
+   LOCAL cTemp, aParts, cAno, cMes, cDia, nAno
+
+   IF ValType( xData ) == "D"
+      RETURN xData
+   ENDIF
+
+   IF ValType( xData ) <> "C" .OR. Empty( xData ) .OR. xData == "NULL"
+      RETURN dRet
+   ENDIF
+
+   xData := AllTrim( xData )
+
+   cTemp := StrTran( xData, "-", "/" )
+   cTemp := StrTran( cTemp, ".", "/" )
+
+   aParts := hb_ATokens( cTemp, "/" )
+
+   IF Len( aParts ) >= 3
+      IF Len( aParts[ 1 ] ) == 4
+         cAno := aParts[ 1 ]
+         cMes := StrZero( Val( aParts[ 2 ] ), 2 )
+         cDia := StrZero( Val( Left( aParts[ 3 ], 2 ) ), 2 )
+      ELSE
+         cDia := StrZero( Val( aParts[ 1 ] ), 2 )
+         cMes := StrZero( Val( aParts[ 2 ] ), 2 )
+         cAno := Left( aParts[ 3 ], 4 )
+         
+         IF Len( cAno ) == 2
+            nAno := Val( cAno )
+            IF nAno < 50
+               cAno := "20" + cAno
+            ELSE
+               cAno := "19" + cAno
+            ENDIF
+         ENDIF
+      ENDIF
+      
+      IF cAno + cMes + cDia == "00000000"
+         RETURN dRet
+      ENDIF
+      
+      RETURN SToD( cAno + cMes + cDia )
+   ELSE
+      IF Len( cTemp ) == 8
+         IF Val( Left( cTemp, 4 ) ) > 1900
+            dRet := SToD( cTemp )
+         ELSE
+            dRet := SToD( Right( cTemp, 4 ) + SubStr( cTemp, 3, 2 ) + Left( cTemp, 2 ) )
+         ENDIF
+      ELSEIF Len( cTemp ) == 6
+         nAno := Val( Right( cTemp, 2 ) )
+         IF nAno < 50
+            cAno := "20" + Right( cTemp, 2 )
+         ELSE
+            cAno := "19" + Right( cTemp, 2 )
+         ENDIF
+         dRet := SToD( cAno + SubStr( cTemp, 3, 2 ) + Left( cTemp, 2 ) )
+      ELSE
+         dRet := CToD( xData )
+      ENDIF
+   ENDIF
+
+   RETURN dRet
