@@ -6,7 +6,7 @@
 #include "dbinfo.ch"
 #include "hbsqlit3.ch"  // <- ESSENCIAL PARA RESOLVER OS AVISOS DO SQLITE
 
-// --- MAPEAMENTO DA ÃREA DE TRABALHO (WORKAREA) ---
+// --- MAPEAMENTO DA ÁREA DE TRABALHO (WORKAREA) ---
 #define AREA_CONN         1
 #define AREA_TABLE        2
 #define AREA_PK           3
@@ -282,9 +282,9 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
             aRow[ i ] := Round( sqlite3_column_double( stmt, i ), aWAData[ AREA_STRUCT ][ i ][ UR_FI_DEC ] )
             
          ELSE
-            // --- EXTRAÃ‡ÃƒO NATIVA SEM ON-DEMAND ---
+            // --- EXTRAÇÃO NATIVA SEM ON-DEMAND ---
             IF nFType == HB_FT_BLOB .OR. nFType == HB_FT_IMAGE .OR. nFType == HB_FT_OLE
-               // ExtraÃ§Ã£o binÃ¡ria direta (evita truncamento por \0 no SQLite)[cite: 23]
+               // Extração binária direta (evita truncamento por \0 no SQLite)[cite: 23]
                aRow[ i ] := sqlite3_column_blob( stmt, i )
             ELSE
                cVal := sqlite3_column_text( stmt, i )
@@ -320,7 +320,7 @@ STATIC FUNCTION SL3_GETVALUE( nWA, nField, xValue )
       xValue := aWAData[ AREA_CACHE ][ aWAData[ AREA_RECNO ], nField ]
    ENDIF
 
-   // --- MASCARAMENTO DA INFORMAÃ‡ÃƒO VIA PARÃ‚METROS GLOBAIS ---[cite: 22]
+   // --- MASCARAMENTO DA INFORMAÇÃO VIA PARÂMETROS GLOBAIS ---[cite: 22]
    IF cType == HB_FT_BLOB .OR. cType == HB_FT_IMAGE .OR. cType == HB_FT_OLE
       IF !t_lLoadBlobs
          xValue := "<IMAGEM/BLOB>"
@@ -338,7 +338,7 @@ STATIC FUNCTION SL3_PUTVALUE( nWA, nField, xValue )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
    LOCAL cType   := aWAData[ AREA_TYPES ][ nField ]
 
-   // --- SEPARAÃ‡ÃƒO CLARA: BLOB vs MEMO ---
+   // --- SEPARAÇÃO CLARA: BLOB vs MEMO ---
    IF cType == HB_FT_BLOB .OR. cType == HB_FT_IMAGE .OR. cType == HB_FT_OLE
       IF ( ValType( xValue ) == "C" .AND. xValue == "<IMAGEM/BLOB>" ) .OR. !t_lLoadBlobs
          RETURN SUCCESS
@@ -434,19 +434,19 @@ STATIC FUNCTION SL3_RECCOUNT( nWA, nRecords )
    stmt := sqlite3_prepare( db, "SELECT COUNT(*) FROM " + aWAData[ AREA_TABLE ] )
    
    IF !Empty( stmt )
-      // Se a consulta rodar com sucesso, lÃª a primeira linha
+      // Se a consulta rodar com sucesso, lê a primeira linha
       IF sqlite3_step( stmt ) == SQLITE_ROW
-         // No Harbour com SQLite, o Ã­ndice da coluna comeÃ§a em 1
+         // No Harbour com SQLite, o índice da coluna começa em 1
          nRecords := sqlite3_column_int( stmt, 1 )
       ELSE
-         // Fallback de seguranÃ§a
+         // Fallback de segurança
          nRecords := Len( aWAData[ AREA_CACHE ] )
       ENDIF
       
-      // Finaliza o statement para liberar memÃ³ria
+      // Finaliza o statement para liberar memória
       sqlite3_finalize( stmt )
    ELSE
-      // Fallback de seguranÃ§a se falhar a instruÃ§Ã£o SQL
+      // Fallback de segurança se falhar a instrução SQL
       nRecords := Len( aWAData[ AREA_CACHE ] )
    ENDIF
 
@@ -500,7 +500,7 @@ STATIC FUNCTION SL3_FLUSH( nWA )
          IF Empty( aWAData[ AREA_PK ] )
             oError := ErrorNew()
             oError:GenCode := EG_DATATYPE
-            oError:Description := "SL3RDD: OperaÃ§Ã£o UPDATE abortada. Defina a Primary Key usando SL3_SETPK() primeiro."
+            oError:Description := "SL3RDD: Operação UPDATE abortada. Defina a Primary Key usando SL3_SETPK() primeiro."
             UR_SUPER_ERROR( nWA, oError )
             RETURN FAILURE
          ENDIF
@@ -597,7 +597,7 @@ STATIC FUNCTION SL3_DELETE( nWA )
    IF Empty( aWAData[ AREA_PK ] )
       oError := ErrorNew()
       oError:GenCode := EG_DATATYPE
-      oError:Description := "SL3RDD: OperaÃ§Ã£o DELETE abortada. Defina a Primary Key usando SL3_SETPK() primeiro."
+      oError:Description := "SL3RDD: Operação DELETE abortada. Defina a Primary Key usando SL3_SETPK() primeiro."
       UR_SUPER_ERROR( nWA, oError )
       RETURN FAILURE
    ENDIF
@@ -798,7 +798,7 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
       
       // --- MAPEAMENTO DE TIPOS BASEADO EM GERACAMPODBF ---
       DO CASE
-         // --- NÃºmeros com Suporte a Decimais ---
+         // --- Números com Suporte a Decimais ---
          CASE "NUMERIC" $ cBaseType .OR. "DECIMAL" $ cBaseType .OR. "NUMBER" $ cBaseType
             aField[ UR_FI_TYPE ] := HB_FT_DOUBLE
             aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 10 )
@@ -846,7 +846,7 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
             aField[ UR_FI_LEN ]  := 8
             aField[ UR_FI_DEC ]  := 0
 
-         // --- LÃ³gicos ---
+         // --- Lógicos ---
          CASE "BOOL" $ cBaseType
             aField[ UR_FI_TYPE ] := HB_FT_LOGICAL
             aField[ UR_FI_LEN ]  := 1
@@ -866,11 +866,11 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
 
          CASE "CHAR" $ cBaseType .OR. "TEXT" $ cBaseType .OR. "VARCHAR" $ cBaseType .OR. "BPCHAR" $ cBaseType
             aField[ UR_FI_TYPE ] := HB_FT_STRING
-            // Trunca em 250 se exceder o limite seguro ou se nÃ£o for especificado
+            // Trunca em 250 se exceder o limite seguro ou se não for especificado
             aField[ UR_FI_LEN ]  := IIf( nFieldLen == 0, 250, IIf( nFieldLen > 250, 250, nFieldLen ) )
             aField[ UR_FI_DEC ]  := 0
 
-         // --- BinÃ¡rios ---
+         // --- Binários ---
          CASE "BYTEA" $ cBaseType .OR. "BLOB" $ cBaseType .OR. "IMAGE" $ cBaseType .OR. "VARBINARY" $ cBaseType
             aField[ UR_FI_TYPE ] := HB_FT_BLOB
             aField[ UR_FI_LEN ]  := 10
@@ -906,7 +906,7 @@ RETURN nResult
 
 // +--------------------------------------------------------------------
 // +    Static Function strlogicrdd( cVAL, lDEFAULT )
-// +    Conversor universal de retornos textuais/numÃ©ricos para Booleano
+// +    Conversor universal de retornos textuais/numéricos para Booleano
 // +--------------------------------------------------------------------
 STATIC FUNCTION strlogicrdd( cVAL, lDEFAULT )
 
@@ -970,15 +970,15 @@ STATIC FUNCTION StrDateRdd( xData )
    cTemp := xData
    nPos  := At( ",", cTemp )
    
-   // Se tiver vÃ­rgula (ex: "Fri,"), removemos ela e o dia da semana
+   // Se tiver vírgula (ex: "Fri,"), removemos ela e o dia da semana
    IF nPos > 0
       cTemp := AllTrim( SubStr( cTemp, nPos + 1 ) )
    ENDIF
    
-   // Quebra pelos espaÃ§os
+   // Quebra pelos espaços
    aParts := hb_ATokens( cTemp, " " )
    
-   // Se tem pelo menos 3 partes (Dia, MÃªs, Ano), tentamos validar
+   // Se tem pelo menos 3 partes (Dia, Mês, Ano), tentamos validar
    IF Len( aParts ) >= 3
       cMesStr := Upper( Left( aParts[ 2 ], 3 ) ) // Pega os 3 primeiros caracteres (JUN)
       cMes    := "00"
@@ -998,7 +998,7 @@ STATIC FUNCTION StrDateRdd( xData )
          CASE cMesStr == "DEC" .OR. cMesStr == "DEZ"; cMes := "12"
       ENDCASE
       
-      // Se encontrou um mÃªs vÃ¡lido e o ano tem 4 dÃ­gitos, retorna direto
+      // Se encontrou um mês válido e o ano tem 4 dígitos, retorna direto
       IF cMes != "00" .AND. Len( aParts[ 3 ] ) == 4
          cDia := StrZero( Val( aParts[ 1 ] ), 2 )
          cAno := aParts[ 3 ]
@@ -1062,7 +1062,7 @@ STATIC FUNCTION StrDateRdd( xData )
 
 
 // +--------------------------------------------------------------------
-// +    FunÃ§Ãµes de ManipulaÃ§Ã£o Direta de Memo/Blob
+// +    Funções de Manipulação Direta de Memo/Blob
 // +--------------------------------------------------------------------
 FUNCTION SL3_PegarMemo( cCampo )
    LOCAL cTxt, lAnt := t_lLoadMemos
