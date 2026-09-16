@@ -2,7 +2,7 @@ incpaths=include
 
 libpaths=lib/${hb_plat}/${hb_comp}
 
-libs=harbourparadox
+libs=sqliterdd
 #libs=xhb.hbc
 
 {!xhb}prgflags=-gc3
