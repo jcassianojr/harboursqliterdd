@@ -231,7 +231,7 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
          CASE mFldNm == "SR_RECNO"
             cSql += "INTEGER UNIQUE"
          CASE mFldType == HB_FT_STRING .OR. mFldType == HB_FT_ANY .OR. mFldType == HB_FT_VARLENGTH
-            cSql += "TEXT NOT NULL DEFAULT ('')"
+            cSql += "VARCHAR(" + hb_ntos( mFldLen ) + ") NOT NULL DEFAULT ('')"
          CASE mFldType == HB_FT_DATE
             cSql += "DATE NOT NULL DEFAULT ('')"
          CASE mFldType == HB_FT_TIMESTAMP .OR. mFldType == HB_FT_TIME

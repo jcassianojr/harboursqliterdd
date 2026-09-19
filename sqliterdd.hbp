@@ -24,6 +24,7 @@
 xhb.hbc
 hbsqlit3.hbc
 SL3RDD.PRG
+sl3class.prg
 
 
 $hb_pkg_install.hbm
