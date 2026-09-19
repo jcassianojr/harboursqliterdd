@@ -19,8 +19,10 @@
 #define AREA_STRUCT       11
 #define AREA_STMT         12  
 #define AREA_FETCHED_EOF  13  
-#define AREA_TYPES        14  
-#define AREA_LEN          14
+#define AREA_TYPES        14
+#define AREA_STMT_UPDATE  15 // Melhoria: Cache de statement para UPDATE
+#define AREA_STMT_DELETE  16 // Melhoria: Cache de statement para DELETE
+#define AREA_LEN          16
 
 ANNOUNCE SL3RDD
 
@@ -29,7 +31,7 @@ THREAD STATIC t_lLoadMemos := .T.
 THREAD STATIC t_lLoadBlobs := .T.
 
 // +--------------------------------------------------------------------
-// +    Funcoes de Gerenciamento de Conexao SQLite
+// +    Funcoes de Gerenciamento de Conexao SQLite e Transacoes
 // +--------------------------------------------------------------------
 
 FUNCTION DBSL3CONNECTION( cDbName, lCreate )
@@ -52,11 +54,33 @@ FUNCTION DBSL3CLEARCONNECTION( nConn )
    IF nConn > 0 .AND. nConn <= Len( s_aConnections )
       db := s_aConnections[ nConn ]
       IF !Empty( db )
-         sqlite3_close( db ) // FIX: Prevenir vazamento de conexao
+         // sqlite3_close( db ) // Mantido fora (Fechamento via Garbage Collector)
          s_aConnections[ nConn ] := NIL
       ENDIF
    ENDIF
 RETURN SUCCESS
+
+// Melhoria: Funcoes de Controle de Transacao
+FUNCTION DBSL3BEGINTRANS( nConn )
+   LOCAL db := DBSL3GETHANDLE( nConn )
+   IF !Empty( db )
+      RETURN sqlite3_exec( db, "BEGIN TRANSACTION;" ) == SQLITE_OK
+   ENDIF
+RETURN .F.
+
+FUNCTION DBSL3COMMIT( nConn )
+   LOCAL db := DBSL3GETHANDLE( nConn )
+   IF !Empty( db )
+      RETURN sqlite3_exec( db, "COMMIT;" ) == SQLITE_OK
+   ENDIF
+RETURN .F.
+
+FUNCTION DBSL3ROLLBACK( nConn )
+   LOCAL db := DBSL3GETHANDLE( nConn )
+   IF !Empty( db )
+      RETURN sqlite3_exec( db, "ROLLBACK;" ) == SQLITE_OK
+   ENDIF
+RETURN .F.
 
 PROCEDURE SL3_SetLoadBlobs( lLoad )
    t_lLoadBlobs := lLoad
@@ -93,6 +117,41 @@ FUNCTION SL3_SETPK( cAlias, cFields )
       ENDIF
    ENDIF
 RETURN .F.
+
+// Melhoria: Mapeamento de Erros da Facade para descricoes visiveis
+STATIC FUNCTION SL3_ErrorName( nErrorCode )
+   LOCAL aErrors := { ;
+      { SQLITE_OK        , "SQLITE_OK" }, ;
+      { SQLITE_ERROR     , "SQLITE_ERROR" }, ;
+      { SQLITE_INTERNAL  , "SQLITE_INTERNAL" }, ;
+      { SQLITE_PERM      , "SQLITE_PERM" }, ;
+      { SQLITE_ABORT     , "SQLITE_ABORT" }, ;
+      { SQLITE_BUSY      , "SQLITE_BUSY" }, ;
+      { SQLITE_LOCKED    , "SQLITE_LOCKED" }, ;
+      { SQLITE_NOMEM     , "SQLITE_NOMEM" }, ;
+      { SQLITE_READONLY  , "SQLITE_READONLY" }, ;
+      { SQLITE_INTERRUPT , "SQLITE_INTERRUPT" }, ;
+      { SQLITE_IOERR     , "SQLITE_IOERR" }, ;
+      { SQLITE_CORRUPT   , "SQLITE_CORRUPT" }, ;
+      { SQLITE_NOTFOUND  , "SQLITE_NOTFOUND" }, ;
+      { SQLITE_FULL      , "SQLITE_FULL" }, ;
+      { SQLITE_CANTOPEN  , "SQLITE_CANTOPEN" }, ;
+      { SQLITE_PROTOCOL  , "SQLITE_PROTOCOL" }, ;
+      { SQLITE_EMPTY     , "SQLITE_EMPTY" }, ;
+      { SQLITE_SCHEMA    , "SQLITE_SCHEMA" }, ;
+      { SQLITE_TOOBIG    , "SQLITE_TOOBIG" }, ;
+      { SQLITE_CONSTRAINT, "SQLITE_CONSTRAINT" }, ;
+      { SQLITE_MISMATCH  , "SQLITE_MISMATCH" }, ;
+      { SQLITE_MISUSE    , "SQLITE_MISUSE" }, ;
+      { SQLITE_NOLFS     , "SQLITE_NOLFS" }, ;
+      { SQLITE_AUTH      , "SQLITE_AUTH" }, ;
+      { SQLITE_FORMAT    , "SQLITE_FORMAT" }, ;
+      { SQLITE_RANGE     , "SQLITE_RANGE" }, ;
+      { SQLITE_NOTADB    , "SQLITE_NOTADB" }, ;
+      { SQLITE_ROW       , "SQLITE_ROW" }, ;
+      { SQLITE_DONE      , "SQLITE_DONE" } }
+   LOCAL nPos := AScan( aErrors, {|e| e[1] == nErrorCode } )
+RETURN IIf( nPos > 0, aErrors[nPos][2], "Code " + hb_ntos( nErrorCode ) )
 
 STATIC FUNCTION SL3_INIT( nRDD )
    USRRDD_RDDDATA( nRDD )
@@ -134,7 +193,6 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
       RETURN FAILURE
    ENDIF
 
-   // FIX: Pragmas aplicados antes da criacao e testados em bloco
    cSql := "PRAGMA temp_store = MEMORY; " + ;
            "PRAGMA cache_size = 2000; " + ;
            "PRAGMA journal_mode = WAL; " + ;
@@ -165,7 +223,7 @@ STATIC FUNCTION SL3_CREATE( nWA, aOpenInfo )
          cSql += ", "
       ENDIF
 
-      cSql += '"' + AllTrim( mFldNm ) + '" ' // FIX: Quoting
+      cSql += '"' + AllTrim( mFldNm ) + '" ' 
 
       DO CASE
          CASE mFldType == HB_FT_AUTOINC
@@ -223,6 +281,15 @@ STATIC FUNCTION SL3_CLOSE( nWA )
       sqlite3_finalize( aWAData[ AREA_STMT ] )
       aWAData[ AREA_STMT ] := NIL
    ENDIF
+   // Melhoria: Finaliza as queries cacheadas ao fechar
+   IF !Empty( aWAData[ AREA_STMT_UPDATE ] )
+      sqlite3_finalize( aWAData[ AREA_STMT_UPDATE ] )
+      aWAData[ AREA_STMT_UPDATE ] := NIL
+   ENDIF
+   IF !Empty( aWAData[ AREA_STMT_DELETE ] )
+      sqlite3_finalize( aWAData[ AREA_STMT_DELETE ] )
+      aWAData[ AREA_STMT_DELETE ] := NIL
+   ENDIF
    aWAData[ AREA_CACHE ]  := {}
    aWAData[ AREA_ROWBUF ] := NIL
 RETURN UR_SUPER_CLOSE( nWA )
@@ -259,7 +326,7 @@ STATIC FUNCTION SL3_FETCH_NEXT( nWA )
                aRow[ i ] := NIL
             ENDIF
          ELSEIF nSqlType == SQLITE_INTEGER
-            aRow[ i ] := sqlite3_column_int( stmt, i ) // Pode necessitar _int64 em arrays maiores
+            aRow[ i ] := sqlite3_column_int( stmt, i ) 
             IF nFType == HB_FT_LOGICAL
                aRow[ i ] := ( aRow[ i ] != 0 )
             ENDIF
@@ -432,15 +499,14 @@ STATIC FUNCTION SL3_FLUSH( nWA )
    LOCAL aWAData := USRRDD_AREADATA( nWA )
    LOCAL cSql, cFields, cValues, cWhere, i, nPosPK, oError
    LOCAL db := aWAData[ AREA_CONN ]
-   LOCAL stmt, xVal, nBindIdx, nExecCode, nLastId
-   LOCAL aBinds := {} // FIX: Mapear valores realmente enviados para omitir NULLs default
+   LOCAL stmt, nExecCode, nLastId
+   LOCAL aBinds := {}, aBindTypes := {} 
 
    IF !Empty( aWAData[ AREA_ROWBUF ] )
       IF aWAData[ AREA_APPEND ]
          cFields := ""
          cValues := ""
          FOR i := 1 TO Len( aWAData[ AREA_FIELDS ] )
-            // FIX: Omitir NILs para permitir aplicação de DEFAULT/AutoInc
             IF aWAData[ AREA_ROWBUF ][ i ] != NIL
                IF !Empty( cFields )
                   cFields += ", "
@@ -449,9 +515,12 @@ STATIC FUNCTION SL3_FLUSH( nWA )
                cFields += '"' + aWAData[ AREA_FIELDS ][ i ] + '"'
                cValues += "?" 
                AAdd( aBinds, aWAData[ AREA_ROWBUF ][ i ] )
+               AAdd( aBindTypes, aWAData[ AREA_TYPES ][ i ] ) // Salva o tipo do campo
             ENDIF
          NEXT
          cSql := 'INSERT INTO "' + aWAData[ AREA_TABLE ] + '" (' + cFields + ') VALUES (' + cValues + ')'
+         
+         stmt := sqlite3_prepare( db, cSql ) // INSERT é dinamico (NILs), mantem prepare
       ELSE
          IF Empty( aWAData[ AREA_PK ] )
             oError := ErrorNew()
@@ -461,30 +530,50 @@ STATIC FUNCTION SL3_FLUSH( nWA )
             RETURN FAILURE
          ENDIF
          
-         cSql := 'UPDATE "' + aWAData[ AREA_TABLE ] + '" SET '
-         FOR i := 1 TO Len( aWAData[ AREA_FIELDS ] )
-            IF i > 1
-               cSql += ", "
-            ENDIF
-            cSql += '"' + aWAData[ AREA_FIELDS ][ i ] + '" = ?'
-            AAdd( aBinds, aWAData[ AREA_ROWBUF ][ i ] )
-         NEXT
+         // Melhoria: Statement Reuse para o UPDATE
+         stmt := aWAData[ AREA_STMT_UPDATE ]
+         IF Empty( stmt )
+            cSql := 'UPDATE "' + aWAData[ AREA_TABLE ] + '" SET '
+            FOR i := 1 TO Len( aWAData[ AREA_FIELDS ] )
+               IF i > 1
+                  cSql += ", "
+               ENDIF
+               cSql += '"' + aWAData[ AREA_FIELDS ][ i ] + '" = ?'
+            NEXT
+            
+            cWhere := ""
+            FOR i := 1 TO Len( aWAData[ AREA_PK ] )
+               nPosPK := AScan( aWAData[ AREA_FIELDS ], aWAData[ AREA_PK ][ i ] )
+               IF nPosPK > 0
+                  IF i > 1
+                     cWhere += " AND "
+                  ENDIF
+                  cWhere += '"' + aWAData[ AREA_PK ][ i ] + '" = ?'
+               ENDIF
+            NEXT
+            cSql += " WHERE " + cWhere
+            
+            stmt := sqlite3_prepare( db, cSql )
+            aWAData[ AREA_STMT_UPDATE ] := stmt
+         ELSE
+            sqlite3_reset( stmt )
+            sqlite3_clear_bindings( stmt )
+         ENDIF
          
-         cWhere := ""
+         // Alimenta parametros do UPDATE
+         FOR i := 1 TO Len( aWAData[ AREA_FIELDS ] )
+            AAdd( aBinds, aWAData[ AREA_ROWBUF ][ i ] )
+            AAdd( aBindTypes, aWAData[ AREA_TYPES ][ i ] )
+         NEXT
          FOR i := 1 TO Len( aWAData[ AREA_PK ] )
             nPosPK := AScan( aWAData[ AREA_FIELDS ], aWAData[ AREA_PK ][ i ] )
             IF nPosPK > 0
-               IF i > 1
-                  cWhere += " AND "
-               ENDIF
-               cWhere += '"' + aWAData[ AREA_PK ][ i ] + '" = ?'
                AAdd( aBinds, aWAData[ AREA_CACHE ][ aWAData[ AREA_RECNO ], nPosPK ] )
+               AAdd( aBindTypes, aWAData[ AREA_TYPES ][ nPosPK ] )
             ENDIF
          NEXT
-         cSql += " WHERE " + cWhere
       ENDIF
 
-      stmt := sqlite3_prepare( db, cSql )
       IF Empty( stmt )
          oError := ErrorNew()
          oError:GenCode := EG_DATATYPE
@@ -494,17 +583,19 @@ STATIC FUNCTION SL3_FLUSH( nWA )
       ENDIF
 
       FOR i := 1 TO Len( aBinds )
-         SL3_BIND_VAR( stmt, i, aBinds[ i ] )
+         SL3_BIND_VAR( stmt, i, aBinds[ i ], aBindTypes[ i ] )
       NEXT
 
-      // FIX: Tratar erro e commit
       nExecCode := sqlite3_step( stmt )
-      sqlite3_finalize( stmt )
+      
+      IF aWAData[ AREA_APPEND ]
+         sqlite3_finalize( stmt ) // Insert continua finalizando por ser dinamico
+      ENDIF
 
       IF nExecCode != SQLITE_DONE .AND. nExecCode != SQLITE_ROW
          oError := ErrorNew()
          oError:GenCode := EG_WRITE
-         oError:Description := "Erro gravacao SQLite (" + hb_ntos(nExecCode) + "): " + sqlite3_errmsg( db )
+         oError:Description := "Erro gravacao SQLite (" + SL3_ErrorName(nExecCode) + "): " + sqlite3_errmsg( db )
          UR_SUPER_ERROR( nWA, oError )
          RETURN FAILURE
       ENDIF
@@ -512,12 +603,10 @@ STATIC FUNCTION SL3_FLUSH( nWA )
       IF aWAData[ AREA_APPEND ]
          nLastId := sqlite3_last_insert_rowid( db )
          
-         // Atualiza cache e injeta ID gerado
          AAdd( aWAData[ AREA_CACHE ], AClone( aWAData[ AREA_ROWBUF ] ) )
          aWAData[ AREA_APPEND ] := .F.
          aWAData[ AREA_RECNO ]  := Len( aWAData[ AREA_CACHE ] )
          
-         // Preenche o autoincrement local se houver PK correspondente
          IF !Empty( aWAData[ AREA_PK ] ) .AND. nLastId > 0
              nPosPK := AScan( aWAData[ AREA_FIELDS ], aWAData[ AREA_PK ][ 1 ] )
              IF nPosPK > 0 .AND. aWAData[ AREA_CACHE ][ aWAData[ AREA_RECNO ], nPosPK ] == NIL
@@ -532,14 +621,16 @@ STATIC FUNCTION SL3_FLUSH( nWA )
    ENDIF
 RETURN SUCCESS
 
-STATIC FUNCTION SL3_BIND_VAR( stmt, nIndex, xVal )
+// Melhoria: Suporte ao sqlite3_bind_blob baseado no cFldType
+STATIC FUNCTION SL3_BIND_VAR( stmt, nIndex, xVal, cFldType )
    LOCAL cType := ValType( xVal )
    IF xVal == NIL
       sqlite3_bind_null( stmt, nIndex )
+   ELSEIF cFldType == HB_FT_BLOB .OR. cFldType == HB_FT_IMAGE .OR. cFldType == HB_FT_OLE
+      sqlite3_bind_blob( stmt, nIndex, xVal ) 
    ELSEIF cType == "N"
       IF Int( xVal ) == xVal
-         // FIX: Prevenir conversao float de PKs/inteiros
-         sqlite3_bind_int( stmt, nIndex, xVal ) // Use int64 no Harbour se compativel
+         sqlite3_bind_int( stmt, nIndex, xVal ) 
       ELSE
          sqlite3_bind_double( stmt, nIndex, xVal ) 
       ENDIF
@@ -572,20 +663,28 @@ STATIC FUNCTION SL3_DELETE( nWA )
    ENDIF
 
    IF aWAData[ AREA_RECNO ] > 0 .AND. aWAData[ AREA_RECNO ] <= Len( aWAData[ AREA_CACHE ] )
-      FOR i := 1 TO Len( aWAData[ AREA_PK ] )
-         nPosPK := AScan( aWAData[ AREA_FIELDS ], aWAData[ AREA_PK ][ i ] )
-         IF nPosPK > 0
-            IF i > 1
-               cWhere += " AND "
+      
+      // Melhoria: Statement Reuse para exclusao
+      stmt := aWAData[ AREA_STMT_DELETE ]
+      IF Empty( stmt )
+         FOR i := 1 TO Len( aWAData[ AREA_PK ] )
+            nPosPK := AScan( aWAData[ AREA_FIELDS ], aWAData[ AREA_PK ][ i ] )
+            IF nPosPK > 0
+               IF i > 1
+                  cWhere += " AND "
+               ENDIF
+               cWhere += '"' + aWAData[ AREA_PK ][ i ] + '" = ?'
             ENDIF
-            cWhere += '"' + aWAData[ AREA_PK ][ i ] + '" = ?'
-         ENDIF
-      NEXT
+         NEXT
+         
+         cSql := 'DELETE FROM "' + aWAData[ AREA_TABLE ] + '" WHERE ' + cWhere
+         stmt := sqlite3_prepare( db, cSql )
+         aWAData[ AREA_STMT_DELETE ] := stmt
+      ELSE
+         sqlite3_reset( stmt )
+         sqlite3_clear_bindings( stmt )
+      ENDIF
       
-      cSql := 'DELETE FROM "' + aWAData[ AREA_TABLE ] + '" WHERE ' + cWhere
-      stmt := sqlite3_prepare( db, cSql )
-      
-      // FIX: Verificar o preparo da exclusao
       IF Empty( stmt )
          oError := ErrorNew()
          oError:GenCode := EG_DATATYPE
@@ -599,18 +698,18 @@ STATIC FUNCTION SL3_DELETE( nWA )
          nPosPK := AScan( aWAData[ AREA_FIELDS ], aWAData[ AREA_PK ][ i ] )
          IF nPosPK > 0
             xVal := aWAData[ AREA_CACHE ][ aWAData[ AREA_RECNO ], nPosPK ]
-            SL3_BIND_VAR( stmt, nBindIdx, xVal )
+            // Passar o tipo do campo PK
+            SL3_BIND_VAR( stmt, nBindIdx, xVal, aWAData[ AREA_TYPES ][ nPosPK ] )
             nBindIdx++
          ENDIF
       NEXT
       
       nExecCode := sqlite3_step( stmt )
-      sqlite3_finalize( stmt )
 
       IF nExecCode != SQLITE_DONE
          oError := ErrorNew()
          oError:GenCode := EG_WRITE
-         oError:Description := "Falha no DELETE: " + sqlite3_errmsg( db )
+         oError:Description := "Falha no DELETE (" + SL3_ErrorName(nExecCode) + "): " + sqlite3_errmsg( db )
          UR_SUPER_ERROR( nWA, oError )
          RETURN FAILURE
       ENDIF
@@ -649,7 +748,6 @@ STATIC FUNCTION SL3_INFO( nWA, nIndex, cargo )
          xRet := UR_SUPER_INFO( nWA, nIndex, cargo )
    ENDCASE
 RETURN xRet
-
 
 FUNCTION SL3RDD_GETFUNCTABLE( pFuncCount, pFuncTable, pSuperTable, nRddID )
    LOCAL cSuperRDD := NIL
@@ -714,6 +812,8 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
    aWAData[ AREA_TYPES ]       := {}
    aWAData[ AREA_CACHE ]       := {}
    aWAData[ AREA_FETCHED_EOF ] := .F.
+   aWAData[ AREA_STMT_UPDATE ] := NIL
+   aWAData[ AREA_STMT_DELETE ] := NIL
 
    stmtPk := sqlite3_prepare( db, 'PRAGMA table_info("' + cTableName + '")' )
    IF !Empty( stmtPk )
@@ -805,8 +905,6 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
             aField[ UR_FI_TYPE ] := HB_FT_LONG
             aField[ UR_FI_LEN ]  := IIf( nFieldLen > 0, nFieldLen, 10 )
             aField[ UR_FI_DEC ]  := 0
-
-         // FIX: Distinguir Timestamp, Time e Date nativamente
          CASE "TIMESTAMP" $ cBaseType .OR. "DATETIME" $ cBaseType
             aField[ UR_FI_TYPE ] := HB_FT_TIMESTAMP
             aField[ UR_FI_LEN ]  := 8
@@ -819,7 +917,6 @@ STATIC FUNCTION SL3_OPEN( nWA, aOpenInfo )
             aField[ UR_FI_TYPE ] := HB_FT_DATE
             aField[ UR_FI_LEN ]  := 8
             aField[ UR_FI_DEC ]  := 0
-
          CASE "BOOL" $ cBaseType
             aField[ UR_FI_TYPE ] := HB_FT_LOGICAL
             aField[ UR_FI_LEN ]  := 1
